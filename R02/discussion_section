@@ -5,7 +5,9 @@ import matplotlib.ticker as mticker
 
 # =============================================================================
 # TEORÍA CUANTITATIVA DEL DINERO Y EL MULTIPLICADOR — PERÚ (BCRP)
-# Práctica Dirigida — Macroeconomía II
+# Practice Session 02 — Macroeconomics II
+# Universidad del Pacífico
+# TAs: Alejandro Ventura & Valeria C. Vicente
 # =============================================================================
 #
 # ¿QUÉ SERIES ESTAMOS DESCARGANDO Y POR QUÉ?
