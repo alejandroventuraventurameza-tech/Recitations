@@ -1,1 +1,373 @@
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║     RAMSEY-CASS-KOOPMANS — Diagrama de Fases Interactivo (Colab)       ║
+# ║                  Macroeconomics II · UP 2026-I                          ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+#
+# Instrucciones para Google Colab:
+#   1. Sube este archivo o pega el contenido en una celda
+#   2. Ejecuta la celda — los sliders aparecerán debajo del gráfico
+#   3. Mueve los sliders para actualizar el diagrama en tiempo real
+#   4. Ingresa (k₀, c₀) en los campos de texto y presiona "Trazar" para
+#      dibujar una trayectoria desde ese punto inicial
 
+# ── Instalación (Colab ya tiene estas librerías, pero por si acaso) ───────
+# !pip install ipywidgets matplotlib numpy -q
+
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.lines import Line2D
+from IPython.display import display, clear_output
+import ipywidgets as widgets
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Funciones del modelo
+# ─────────────────────────────────────────────────────────────────────────────
+KMAX, CMAX = 10.0, 1.65
+NK         = 800
+DT         = 0.04
+N_STEPS    = 400
+
+def phi(k, a):   return k ** a
+def dphi(k, a):  return a * k ** (a - 1)
+def d2phi(k,a):  return a * (a-1) * k ** (a-2)
+
+def steady_state(a, m, rho):
+    k_bar  = (a / (m + rho)) ** (1.0 / (1.0 - a))
+    c_bar  = phi(k_bar, a) - m * k_bar
+    k_gold = (a / m) ** (1.0 / (1.0 - a))
+    return k_bar, c_bar, k_gold
+
+def jacobian_eigs(k_bar, c_bar, a, m, rho):
+    j11 = dphi(k_bar, a) - m
+    j21 = c_bar * d2phi(k_bar, a)
+    tr   = j11          # j22 = 0 en el steady-state
+    det  = -(-1.0)*j21  # = j21  (j12 = -1)
+    disc = tr**2 - 4*det
+    if disc >= 0:
+        return (tr + disc**0.5)/2, (tr - disc**0.5)/2
+    return (complex(tr/2,  (-disc)**0.5/2),
+            complex(tr/2, -(-disc)**0.5/2))
+
+def saddle_slope(k_bar, c_bar, a, m, rho):
+    j11 = dphi(k_bar, a) - m
+    j21 = c_bar * d2phi(k_bar, a)
+    disc = j11**2 + 4*j21
+    lam_s = (j11 - disc**0.5) / 2.0
+    slope = (lam_s - j11) / (-1.0)
+    return slope
+
+def vf(k, c, a, m, rho):
+    dk = phi(k, a) - c - m * k
+    dc = c * (dphi(k, a) - m - rho)
+    return dk, dc
+
+def rk4_step(k, c, dt, a, m, rho):
+    dk1, dc1 = vf(k, c, a, m, rho)
+    dk2, dc2 = vf(k+.5*dt*dk1, c+.5*dt*dc1, a, m, rho)
+    dk3, dc3 = vf(k+.5*dt*dk2, c+.5*dt*dc2, a, m, rho)
+    dk4, dc4 = vf(k+dt*dk3,    c+dt*dc3,    a, m, rho)
+    return (k + dt*(dk1+2*dk2+2*dk3+dk4)/6,
+            c + dt*(dc1+2*dc2+2*dc3+dc4)/6)
+
+def integrate(k0, c0, dt, n, a, m, rho):
+    ks, cs = [k0], [c0]
+    for _ in range(n):
+        k, c = rk4_step(ks[-1], cs[-1], dt, a, m, rho)
+        if not (0.01 < k < KMAX*1.4 and 0.001 < c < CMAX*1.4):
+            break
+        ks.append(k); cs.append(c)
+    return np.array(ks), np.array(cs)
+
+def saddle_path(a, m, rho, eps=0.07):
+    k_bar, c_bar, _ = steady_state(a, m, rho)
+    slope = saddle_slope(k_bar, c_bar, a, m, rho)
+    def branch(dk0):
+        ks, cs = integrate(k_bar+dk0, c_bar+slope*dk0,
+                           -DT, 800, a, m, rho)
+        return ks[::-1], cs[::-1]
+    kL, cL = branch(-eps)
+    kR, cR = branch(+eps)
+    k = np.concatenate([kL, [k_bar], kR])
+    c = np.concatenate([cL, [c_bar], cR])
+    mask = (k > 0) & (k < KMAX) & (c > 0) & (c < CMAX)
+    return k[mask], c[mask]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Colores
+# ─────────────────────────────────────────────────────────────────────────────
+C = dict(
+    dk0    = '#1D9E75',
+    dc0    = '#D85A30',
+    saddle = '#7F77DD',
+    ss     = '#2C2C2A',
+    traj   = '#BA7517',
+    arrow  = '#888780',
+    gold   = '#085041',
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Estado: trayectorias acumuladas
+# ─────────────────────────────────────────────────────────────────────────────
+trajectories = []   # lista de (ks, cs)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Función de dibujo principal
+# ─────────────────────────────────────────────────────────────────────────────
+def draw(a, m, rho,
+         show_dk0=True, show_dc0=True, show_saddle=True,
+         show_vf=True,  show_gold=True):
+
+    k_bar, c_bar, k_gold = steady_state(a, m, rho)
+    l1, l2 = jacobian_eigs(k_bar, c_bar, a, m, rho)
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5),
+                             gridspec_kw={'width_ratios': [2, 1]})
+    fig.patch.set_facecolor('#FAFAF8')
+    ax  = axes[0]
+    axi = axes[1]
+
+    ax.set_facecolor('#FAFAF8')
+    ax.set_xlim(0, KMAX); ax.set_ylim(0, CMAX)
+    ax.set_xlabel('$k$  (capital per cápita)', fontsize=12)
+    ax.set_ylabel('$c$  (consumo per cápita)', fontsize=12)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    # ── ΔK=0 locus ──────────────────────────────────────────────────────────
+    if show_dk0:
+        kv = np.linspace(0.05, KMAX, NK)
+        cv = phi(kv, a) - m * kv
+        msk = (cv > 0) & (cv < CMAX + 0.05)
+        ax.plot(kv[msk], cv[msk], color=C['dk0'], lw=2.5,
+                label=r'$\Delta K=0$', zorder=3)
+        ax.text(1.3, phi(1.3,a) - m*1.3 + 0.04, r'$\Delta K=0$',
+                color=C['dk0'], fontsize=10, fontweight='bold')
+
+    # ── ΔC=0 locus ──────────────────────────────────────────────────────────
+    if show_dc0 and 0 < k_bar < KMAX:
+        ax.axvline(k_bar, color=C['dc0'], lw=2.5,
+                   label=r'$\Delta C=0$', zorder=3)
+        ax.text(k_bar + 0.12, CMAX*0.88, r'$\Delta C=0$',
+                color=C['dc0'], fontsize=10, fontweight='bold')
+
+    # ── k_gold ───────────────────────────────────────────────────────────────
+    if show_gold and 0 < k_gold < KMAX:
+        ax.axvline(k_gold, color=C['gold'], lw=0.9,
+                   ls=':', alpha=0.7, zorder=2)
+        ax.text(k_gold+0.08, 0.04, r'$k^{gold}$',
+                color=C['gold'], fontsize=9)
+
+    # ── Saddle path ─────────────────────────────────────────────────────────
+    if show_saddle:
+        try:
+            ks, cs = saddle_path(a, m, rho)
+            ax.plot(ks, cs, color=C['saddle'], lw=2, ls='--',
+                    label='Saddle path', zorder=3)
+        except Exception:
+            pass
+
+    # ── Campo vectorial ─────────────────────────────────────────────────────
+    if show_vf:
+        kpts = [1.0, 2.2, 1.0, 2.2, 5.5, 7.5, 5.5, 7.5]
+        cpts = [0.45, 0.65, 1.1, 1.25, 0.50, 0.65, 1.30, 1.40]
+        for kp, cp in zip(kpts, cpts):
+            if 0 < kp < KMAX and 0 < cp < CMAX:
+                dk, dc = vf(kp, cp, a, m, rho)
+                nm = (dk**2 + dc**2)**0.5
+                if nm > 1e-5:
+                    sc = 0.28
+                    ax.annotate('',
+                        xy=(kp+dk/nm*sc, cp+dc/nm*sc),
+                        xytext=(kp-dk/nm*sc, cp-dc/nm*sc),
+                        arrowprops=dict(arrowstyle='->',
+                                        color=C['arrow'], lw=1.3),
+                        zorder=2)
+
+    # ── Trayectorias del usuario ─────────────────────────────────────────────
+    for ks, cs in trajectories:
+        ax.plot(ks, cs, color=C['traj'], lw=1.7, alpha=0.85, zorder=4)
+        if len(ks) >= 2:
+            ax.annotate('', xy=(ks[-1], cs[-1]),
+                        xytext=(ks[-2], cs[-2]),
+                        arrowprops=dict(arrowstyle='->',
+                                        color=C['traj'], lw=1.7))
+        ax.plot(ks[0], cs[0], 'x', color=C['traj'], ms=8, mew=2, zorder=5)
+
+    # ── Punto estacionario ───────────────────────────────────────────────────
+    ax.plot(k_bar, c_bar, 'o', color=C['ss'], ms=8, zorder=6)
+    ax.text(k_bar+0.15, c_bar+0.04, r'$(\bar{k},\,\bar{c})$',
+            fontsize=11, color=C['ss'])
+
+    # ── Leyenda ──────────────────────────────────────────────────────────────
+    leg = [
+        Line2D([0],[0], color=C['dk0'],    lw=2.5, label=r'$\Delta K=0$'),
+        Line2D([0],[0], color=C['dc0'],    lw=2.5, label=r'$\Delta C=0$'),
+        Line2D([0],[0], color=C['saddle'], lw=2, ls='--', label='Saddle path'),
+        Line2D([0],[0], color=C['traj'],   lw=1.7, label='Trayectoria'),
+        Line2D([0],[0], marker='o', color='w',
+               markerfacecolor=C['ss'], ms=8, label='Steady state'),
+    ]
+    ax.legend(handles=leg, loc='upper right', fontsize=9, framealpha=0.85)
+    ax.set_title(f'Diagrama de Fases RCK  (α={a:.2f}, m={m:.2f}, ρ={rho:.2f})',
+                 fontsize=11, fontweight='bold')
+
+    # ── Panel de información ─────────────────────────────────────────────────
+    axi.set_facecolor('#F1EFE8')
+    axi.axis('off')
+    axi.set_xlim(0,1); axi.set_ylim(0,1)
+
+    def fmt(l):
+        if isinstance(l, complex) and abs(l.imag) > 1e-9:
+            return f'{l.real:+.4f} ± {abs(l.imag):.4f}i\n    |λ| = {abs(l):.4f}'
+        return f'{l.real:+.5f}\n    |λ| = {abs(l.real):.5f}'
+
+    n_u = sum(1 for l in [l1,l2] if abs(l) >= 1)
+    bk_ok = (n_u == 1)
+    bk_col = '#0F6E56' if bk_ok else '#993C1D'
+    bk_msg = ('✓  BK: equilibrio único'
+              if bk_ok else
+              ('✗  n_u < 1: indeterminación'
+               if n_u < 1 else '✗  n_u > 1: sin solución'))
+
+    rows = [
+        ('k̄',       f'{k_bar:.5f}'),
+        ('c̄',       f'{c_bar:.5f}'),
+        ('k_gold',  f'{k_gold:.5f}'),
+        ('─────────────────', ''),
+        ('λ₁',      fmt(l1)),
+        ('λ₂',      fmt(l2)),
+        ('─────────────────', ''),
+        ('n_u',     str(n_u) + '  (|λ|≥1)'),
+        ('n_f',     '1  (consumo)'),
+        ('─────────────────', ''),
+    ]
+    y = 0.95
+    axi.set_title('Estado estacionario\ny eigenvalores',
+                  fontsize=10, fontweight='bold', pad=6)
+    for lbl, val in rows:
+        if lbl.startswith('─'):
+            axi.plot([0.02, 0.98],[y,y], color='#C2C0B6', lw=0.6,
+                     transform=axi.transAxes)
+            y -= 0.04; continue
+        axi.text(0.05, y, lbl, fontsize=9, color='#5F5E5A',
+                 va='top', transform=axi.transAxes)
+        axi.text(0.40, y, val, fontsize=9, color='#2C2C2A',
+                 va='top', fontweight='bold', transform=axi.transAxes)
+        y -= (0.11 if '\n' in val else 0.09)
+
+    axi.text(0.5, 0.07, bk_msg, ha='center', va='center',
+             fontsize=10, fontweight='bold', color=bk_col,
+             transform=axi.transAxes,
+             bbox=dict(boxstyle='round,pad=0.4',
+                       facecolor=bk_col, alpha=0.12,
+                       edgecolor=bk_col, lw=1.5))
+
+    plt.tight_layout()
+    plt.show()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Widgets
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Sliders de parámetros
+sl_alpha = widgets.FloatSlider(
+    value=0.35, min=0.10, max=0.60, step=0.01,
+    description='α (prod.)', style={'description_width':'100px'},
+    layout=widgets.Layout(width='420px'))
+sl_m = widgets.FloatSlider(
+    value=0.10, min=0.02, max=0.20, step=0.01,
+    description='m (deprec.)', style={'description_width':'100px'},
+    layout=widgets.Layout(width='420px'))
+sl_rho = widgets.FloatSlider(
+    value=0.05, min=0.01, max=0.15, step=0.01,
+    description='ρ (desc.)', style={'description_width':'100px'},
+    layout=widgets.Layout(width='420px'))
+
+# Checkboxes de visibilidad
+chk_dk0    = widgets.Checkbox(value=True,  description='ΔK=0 locus')
+chk_dc0    = widgets.Checkbox(value=True,  description='ΔC=0 locus')
+chk_saddle = widgets.Checkbox(value=True,  description='Saddle path')
+chk_vf     = widgets.Checkbox(value=True,  description='Campo vectorial')
+chk_gold   = widgets.Checkbox(value=True,  description='k_gold')
+
+# Trayectoria manual
+txt_k0 = widgets.BoundedFloatText(
+    value=2.0, min=0.1, max=9.9, step=0.1,
+    description='k₀:', layout=widgets.Layout(width='160px'))
+txt_c0 = widgets.BoundedFloatText(
+    value=0.3, min=0.01, max=1.59, step=0.01,
+    description='c₀:', layout=widgets.Layout(width='160px'))
+btn_traj  = widgets.Button(description='Trazar trayectoria',
+                           button_style='warning',
+                           layout=widgets.Layout(width='180px'))
+btn_clear = widgets.Button(description='Limpiar trayectorias',
+                           button_style='danger',
+                           layout=widgets.Layout(width='180px'))
+
+out = widgets.Output()
+
+def redraw(*_):
+    with out:
+        clear_output(wait=True)
+        draw(sl_alpha.value, sl_m.value, sl_rho.value,
+             chk_dk0.value, chk_dc0.value, chk_saddle.value,
+             chk_vf.value, chk_gold.value)
+
+def add_traj(_):
+    k0, c0 = txt_k0.value, txt_c0.value
+    a, m, rho = sl_alpha.value, sl_m.value, sl_rho.value
+    ks, cs = [], []
+    k, c = k0, c0
+    for _ in range(N_STEPS):
+        ks.append(k); cs.append(c)
+        k, c = rk4_step(k, c, DT, a, m, rho)
+        if not (0.01 < k < KMAX*1.3 and 0.001 < c < CMAX*1.3):
+            break
+    if len(ks) > 1:
+        trajectories.append((np.array(ks), np.array(cs)))
+    redraw()
+
+def clear_trajs(_):
+    trajectories.clear()
+    redraw()
+
+# Conectar observers
+for w in [sl_alpha, sl_m, sl_rho,
+          chk_dk0, chk_dc0, chk_saddle, chk_vf, chk_gold]:
+    w.observe(redraw, names='value')
+btn_traj.on_click(add_traj)
+btn_clear.on_click(clear_trajs)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Layout y display
+# ─────────────────────────────────────────────────────────────────────────────
+title = widgets.HTML(
+    '<h3 style="font-family:sans-serif; margin-bottom:4px;">'
+    'Ramsey–Cass–Koopmans · Diagrama de Fases Interactivo</h3>'
+    '<p style="font-family:sans-serif; color:#5F5E5A; font-size:12px; margin-top:0;">'
+    'Mueve los sliders para actualizar · Ingresa (k₀, c₀) y presiona <b>Trazar</b> '
+    'para añadir trayectorias</p>')
+
+param_box = widgets.VBox([
+    widgets.HTML('<b style="font-family:sans-serif">Parámetros</b>'),
+    sl_alpha, sl_m, sl_rho])
+
+chk_box = widgets.VBox([
+    widgets.HTML('<b style="font-family:sans-serif">Visibilidad</b>'),
+    chk_dk0, chk_dc0, chk_saddle, chk_vf, chk_gold])
+
+traj_box = widgets.VBox([
+    widgets.HTML('<b style="font-family:sans-serif">Trayectoria manual</b>'),
+    widgets.HBox([txt_k0, txt_c0]),
+    widgets.HBox([btn_traj, btn_clear])])
+
+controls = widgets.HBox([param_box,
+                          widgets.HTML('&nbsp;&nbsp;&nbsp;'),
+                          chk_box,
+                          widgets.HTML('&nbsp;&nbsp;&nbsp;'),
+                          traj_box])
+
+ui = widgets.VBox([title, controls, out])
+display(ui)
+redraw()
