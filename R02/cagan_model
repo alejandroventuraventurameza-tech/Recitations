@@ -1,1 +1,534 @@
+# =============================================================================
+# DINÁMICA DE CAGAN (1956) — SHOCKS Y EXPECTATIVAS RACIONALES
+# Practice Session 02 — Macroeconomics II
+# Universidad del Pacífico
+# TAs: Alejandro Ventura & Valeria C. Vicente
+# =============================================================================
+#
+# REFERENCIA TEÓRICA
+# ──────────────────────────────────────────────────────────────────────────────
+# Cagan, P. (1956). "The Monetary Dynamics of Hyperinflation."
+# In: Studies in the Quantity Theory of Money, ed. M. Friedman.
+# Chicago: University of Chicago Press.
+#
+# EL MODELO
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# La demanda de saldos monetarios reales de Cagan:
+#
+#   m_t - p_t = -alpha * (E_t[p_{t+1}] - p_t)         ... (1)
+#
+# donde:
+#   m_t      = logaritmo del nivel de oferta monetaria nominal
+#   p_t      = logaritmo del nivel de precios
+#   alpha    = semielasticidad de la demanda de dinero respecto a la
+#              tasa de inflación esperada (alpha > 0)
+#   E_t[·]   = operador de expectativas condicional en el conjunto de
+#              información disponible al inicio del período t
+#
+# INTUICIÓN de (1):
+#   Cuando la inflación esperada sube en 1 punto porcentual, el costo
+#   de oportunidad de mantener dinero sube → los agentes reducen sus
+#   tenencias de dinero real en 'alpha' puntos porcentuales.
+#   En hiperinflaciones, alpha es grande porque la gente huye del dinero.
+#
+# DERIVACIÓN DE LA SOLUCIÓN EN FORMA CERRADA
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# Partimos de (1) y despejamos p_t:
+#
+#   m_t - p_t = -alpha * (E_t[p_{t+1}] - p_t)
+#
+# Expandiendo el lado derecho:
+#   m_t - p_t = -alpha*E_t[p_{t+1}] + alpha*p_t
+#
+# Pasando p_t al lado derecho:
+#   m_t = p_t + alpha*p_t - alpha*E_t[p_{t+1}]
+#   m_t = (1 + alpha)*p_t - alpha*E_t[p_{t+1}]
+#
+# Despejando p_t:
+#   p_t = (1/(1+alpha))*m_t + (alpha/(1+alpha))*E_t[p_{t+1}]  ... (2)
+#
+# Definamos beta ≡ alpha/(1+alpha). Como alpha > 0, tenemos 0 < beta < 1.
+# Entonces (1-beta) = 1/(1+alpha) y (2) se convierte en:
+#
+#   p_t = (1-beta)*m_t + beta*E_t[p_{t+1}]             ... (3)   [EED]
+#
+# Esto es una ecuación en diferencias HACIA ADELANTE (forward). Para
+# resolverla, iteramos (3) hacia adelante, tomando expectativas
+# racionales (sustituyendo E_t[p_{t+1}] por la misma ecuación en t+1):
+#
+#   E_t[p_{t+1}] = (1-beta)*E_t[m_{t+1}] + beta*E_t[p_{t+2}]
+#
+# Sustituyendo en (3):
+#   p_t = (1-beta)*m_t + beta*[(1-beta)*E_t[m_{t+1}] + beta*E_t[p_{t+2}]]
+#       = (1-beta)*m_t + beta*(1-beta)*E_t[m_{t+1}] + beta²*E_t[p_{t+2}]
+#
+# Iterando N veces y tomando el límite (descartando la burbuja β^N → 0
+# por la condición de no explosión):
+#
+#   p_t = (1-beta) * SUM_{j=0}^{infty} beta^j * E_t[m_{t+j}]   ... (4)
+#
+# INTERPRETACIÓN de (4):
+#   El nivel de precios HOY es el valor presente descontado de los niveles
+#   actuales y FUTUROS de oferta monetaria, donde el factor de descuento
+#   es beta = alpha/(1+alpha). Un alpha mayor (más sensible a inflación)
+#   implica un beta más cercano a 1 → los precios responden más a
+#   cambios en dinero esperado en el futuro lejano.
+#
+# ──────────────────────────────────────────────────────────────────────────────
+# LOS 4 TIPOS DE SHOCKS QUE ANALIZAMOS
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# Caso 1: PERMANENTE NO ANTICIPADO
+#   En t=0, m sube en Δm y permanece ahí para siempre.
+#   Nadie lo veía venir antes de t=0.
+#
+# Caso 2: TRANSITORIO NO ANTICIPADO
+#   En t=0, m sube en Δm por UN solo período. En t=1 vuelve al baseline.
+#   Nadie lo veía venir.
+#
+# Caso 3: PERMANENTE ANTICIPADO (PRE-ANUNCIADO)
+#   En t=0 se ANUNCIA que en t=T habrá un aumento permanente de Δm.
+#   Los precios empiezan a moverse ANTES de que la política se implemente.
+#   ← Este caso es el que "sorprende" a los alumnos.
+#
+# Caso 4: TRANSITORIO ANTICIPADO
+#   En t=0 se anuncia que en t=T habrá un aumento de Δm por UN período.
+# =============================================================================
 
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from matplotlib.patches import FancyArrowPatch
+import matplotlib.patches as mpatches
+
+# ── PARÁMETROS ──────────────────────────────────────────────────────────────
+alpha  = 2.0          # Semielasticidad de demanda de dinero (Cagan usaba ~3-5 para hiperinflación)
+beta   = alpha / (1 + alpha)   # Factor de descuento forward = alpha/(1+alpha)
+T_ann  = 5            # Período en que se implementa el shock pre-anunciado
+T_tot  = 25           # Horizonte temporal de simulación
+delta_m = 10.0        # Tamaño del shock en puntos porcentuales (log-escala ×100)
+m_base = 100.0        # Nivel base de dinero (en logs ×100)
+
+print("=" * 65)
+print("  PARÁMETROS DEL MODELO DE CAGAN")
+print("=" * 65)
+print(f"  alpha  = {alpha:.2f}  (semielasticidad de demanda de dinero)")
+print(f"  beta   = {beta:.4f}  (factor de descuento = alpha/(1+alpha))")
+print(f"  1-beta = {1-beta:.4f}  (= 1/(1+alpha))")
+print(f"  Δm     = {delta_m:.1f}  puntos porcentuales (shock monetario)")
+print(f"  T_anuncio = {T_ann}  períodos hasta implementación")
+print("=" * 65)
+
+# ── FUNCIÓN AUXILIAR: calcular p_t dado un path de E_t[m_{t+j}] ──────────
+def calcular_precios(m_path_esperado, beta, T_tot):
+    """
+    Dada una trayectoria de dinero esperado m_path_esperado[t][j] = E_t[m_{t+j}],
+    calcula p_t = (1-beta) * sum_{j=0}^{J} beta^j * E_t[m_{t+j}]
+
+    En la práctica, como beta < 1, la suma converge rápido.
+    Usamos J = 200 términos (suficiente para beta^200 ≈ 0).
+
+    Args:
+        m_path_esperado: array de forma (T_tot, J_max)
+                         m_path_esperado[t,j] = E_t[m_{t+j}]
+        beta: float, factor de descuento
+        T_tot: int, horizonte de simulación
+
+    Returns:
+        p: array de longitud T_tot con el nivel de precios en cada período
+    """
+    J_max = m_path_esperado.shape[1]
+    j_vec = np.arange(J_max)
+    pesos = (1 - beta) * beta**j_vec         # (1-beta)*beta^j
+    p = m_path_esperado @ pesos              # (T_tot, J_max) @ (J_max,) → (T_tot,)
+    return p
+
+# ── CONFIGURACIÓN DE SHOCKS ───────────────────────────────────────────────
+J_max = 300  # Número de términos en la suma infinita (beta^300 ≈ 0 para beta<1)
+tiempo = np.arange(T_tot)
+
+# ─── CASO 1: SHOCK PERMANENTE NO ANTICIPADO ───────────────────────────────
+# En t=0: m sube en delta_m y PERMANECE así. No se veía venir.
+# Para t < 0:  E_t[m_{t+j}] = m_base para todo j
+# Para t >= 0: E_t[m_{t+j}] = m_base + delta_m para todo j (ya está implementado)
+
+m_perm_noant = np.zeros((T_tot, J_max))
+for t in range(T_tot):
+    if t == 0:
+        # En t=0 se descubre que m subió permanentemente. El agente en t=0
+        # actualiza todas sus expectativas futuras al nivel nuevo.
+        m_perm_noant[t, :] = m_base + delta_m  # E_0[m_{0+j}] = m_base + Δm ∀j
+    else:
+        m_perm_noant[t, :] = m_base + delta_m  # t>0: todos saben que m es más alto
+
+p_perm_noant = calcular_precios(m_perm_noant, beta, T_tot)
+# Nivel de precios ANTES del shock (t < 0): p = m_base (por la QTM en estado estacionario)
+p_perm_noant_full = np.concatenate([[m_base], p_perm_noant])  # incluye t=-1
+
+# ─── CASO 2: SHOCK TRANSITORIO NO ANTICIPADO ─────────────────────────────
+# En t=0: m sube en delta_m solo por ESE período. En t=1, m vuelve a m_base.
+# Para t=0: E_0[m_0] = m_base + delta_m; E_0[m_{0+j}] = m_base para j >= 1
+# Para t>0: E_t[m_{t+j}] = m_base para todo j
+#
+# RESULTADOS CLAVE:
+#   pi_0 = p_0 - p_{-1} = (m_base + (1-beta)*delta_m) - m_base = +(1-beta)*delta_m
+#   pi_1 = p_1 - p_0    = m_base - (m_base + (1-beta)*delta_m) = -(1-beta)*delta_m
+#
+# NOTA: la deflación en t=1 es -(1-beta)*delta_m, NO -(1-beta)*beta*delta_m.
+# No hay factor beta porque el shock desaparece POR COMPLETO en t=1:
+# p_1 vuelve exactamente a m_base, sin atenuación adicional.
+
+m_trans_noant = np.zeros((T_tot, J_max))
+for t in range(T_tot):
+    m_trans_noant[t, :] = m_base  # baseline
+    if t == 0:
+        # El shock ocurre SOLO en j=0 (es decir, en m_0)
+        m_trans_noant[0, 0] = m_base + delta_m  # Solo m_0 sube, m_1, m_2,... no
+
+p_trans_noant = calcular_precios(m_trans_noant, beta, T_tot)
+
+# ─── CASO 3: SHOCK PERMANENTE ANTICIPADO (PRE-ANUNCIADO) ─────────────────
+# En t=0 se ANUNCIA que a partir de t=T_ann, m subirá permanentemente.
+# - Para 0 <= t < T_ann: E_t[m_{t+j}] = m_base para j < T_ann - t
+#                                        m_base + delta_m para j >= T_ann - t
+# - Para t >= T_ann:     E_t[m_{t+j}] = m_base + delta_m para todo j
+#
+# RESULTADOS CLAVE (derivación analítica):
+#   Nivel de precios:
+#     p_t = m_base + delta_m * beta^(T_ann - t)  para 0 <= t <= T_ann
+#     → Los precios suben INMEDIATAMENTE en t=0, antes de la implementación.
+#
+#   Tasa de inflación (para 1 <= t <= T_ann):
+#     pi_t = p_t - p_{t-1}
+#          = (m_base + delta_m*beta^(T-t)) - (m_base + delta_m*beta^(T-t+1))
+#          = delta_m * beta^(T-t) * (1 - beta)   > 0
+#     → La inflación es POSITIVA y CRECIENTE hacia T: las barras verdes suben de izq. a der.
+#     → En t=T: pi_T = delta_m*(1-beta) (el salto final más grande)
+
+m_perm_ant = np.zeros((T_tot, J_max))
+for t in range(T_tot):
+    # Para cada horizonte j, ¿qué espera el agente en t sobre m_{t+j}?
+    for j in range(J_max):
+        t_futuro = t + j
+        if t_futuro >= T_ann:
+            m_perm_ant[t, j] = m_base + delta_m  # Política ya implementada
+        else:
+            m_perm_ant[t, j] = m_base             # Política aún no implementada
+
+p_perm_ant = calcular_precios(m_perm_ant, beta, T_tot)
+
+# Verificación analítica: p_t = m_base + delta_m * beta^(T_ann - t) para t <= T_ann
+p_perm_ant_analitico = np.array([
+    m_base + delta_m * beta**(max(T_ann - t, 0)) for t in range(T_tot)
+])
+error_max = np.max(np.abs(p_perm_ant - p_perm_ant_analitico))
+print(f"\n  Verificación Caso 3 (Permanente Anticipado):")
+print(f"  Error numérico vs. fórmula analítica: {error_max:.2e}")
+print(f"  (Un error < 1e-6 confirma que la suma converge correctamente)")
+
+# ─── CASO 4: SHOCK TRANSITORIO ANTICIPADO ────────────────────────────────
+# En t=0 se anuncia que en t=T_ann, m subirá en delta_m por UN solo período.
+# Para 0 <= t < T_ann:  E_t[m_{t+j}] = m_base + delta_m si t+j == T_ann, else m_base
+# Para t = T_ann:       E_t[m_{t}]   = m_base + delta_m (ya llegó), m_{t+j} = m_base
+# Para t > T_ann:       E_t[m_{t+j}] = m_base para todo j (ya pasó)
+
+m_trans_ant = np.zeros((T_tot, J_max))
+for t in range(T_tot):
+    m_trans_ant[t, :] = m_base  # baseline
+    if t <= T_ann:
+        j_shock = T_ann - t     # El shock ocurre en j = T_ann - t períodos adelante
+        if j_shock < J_max:
+            m_trans_ant[t, j_shock] = m_base + delta_m
+
+p_trans_ant = calcular_precios(m_trans_ant, beta, T_tot)
+
+# ─── TAMBIÉN CALCULAMOS LA TASA DE INFLACIÓN ─────────────────────────────
+# pi_t = p_t - p_{t-1}  (diferencia de primer orden del nivel de precios)
+
+def calcular_inflacion(p_series, p_base):
+    """
+    Calcula la inflación (variación del nivel de precios).
+    p_base es el nivel de precios antes del shock (t = -1).
+    """
+    p_extended = np.concatenate([[p_base], p_series])
+    pi = np.diff(p_extended)  # pi_t = p_t - p_{t-1}
+    return pi
+
+pi_perm_noant  = calcular_inflacion(p_perm_noant,  m_base)
+pi_trans_noant = calcular_inflacion(p_trans_noant, m_base)
+pi_perm_ant    = calcular_inflacion(p_perm_ant,    m_base)
+pi_trans_ant   = calcular_inflacion(p_trans_ant,   m_base)
+
+# ── IMPRESIÓN DE RESULTADOS CLAVE ─────────────────────────────────────────
+print("\n" + "=" * 65)
+print("  RESULTADOS CUANTITATIVOS")
+print("=" * 65)
+
+print(f"\n  CASO 1 — Permanente No Anticipado:")
+print(f"  Δp en t=0: {p_perm_noant[0] - m_base:.2f} pp")
+print(f"  Pass-through inmediato: {(p_perm_noant[0] - m_base)/delta_m*100:.0f}%")
+print(f"  (Esperado: 100% — el shock es permanente y no anticipado)")
+
+print(f"\n  CASO 2 — Transitorio No Anticipado:")
+print(f"  Δp en t=0: {p_trans_noant[0] - m_base:.2f} pp (de un shock de {delta_m} pp)")
+print(f"  Pass-through en t=0: {(p_trans_noant[0] - m_base)/delta_m*100:.1f}%")
+print(f"  Teórico: (1-beta)*Δm = {(1-beta)*delta_m:.2f} pp = {(1-beta)*100:.1f}% del shock")
+print(f"  (Menos que 100% porque los agentes saben que el shock es temporal)")
+
+print(f"\n  CASO 3 — Permanente Anticipado (anuncio en t=0, implementación en t={T_ann}):")
+print(f"  Δp en t=0 (ANTES de implementación): {p_perm_ant[0] - m_base:.2f} pp")
+print(f"  Fórmula analítica: Δm * beta^T = {delta_m * beta**T_ann:.2f} pp  ← confirma")
+print(f"  Δp en t={T_ann} (día de implementación): {p_perm_ant[T_ann] - m_base:.2f} pp")
+print(f"  → Los precios empiezan a moverse {T_ann} períodos ANTES del shock!")
+
+print(f"\n  CASO 4 — Transitorio Anticipado (anuncio en t=0, implementación en t={T_ann}):")
+print(f"  Δp en t=0: {p_trans_ant[0] - m_base:.4f} pp")
+print(f"  Fórmula: (1-beta)*beta^{T_ann}*Δm = {(1-beta)*beta**T_ann*delta_m:.4f} pp  ← confirma")
+print(f"  (Efecto muy pequeño: el shock es lejano Y transitorio)")
+
+# ── VISUALIZACIÓN ─────────────────────────────────────────────────────────
+COLOR_AZUL   = "#003F87"
+COLOR_ROJO   = "#C0392B"
+COLOR_VERDE  = "#1A7A4A"
+COLOR_LILA   = "#8E44AD"
+COLOR_NARANJA= "#E67E22"
+COLOR_GRIS   = "#7F8C8D"
+
+# Figura más alta para dar espacio a las cajas de texto debajo de cada panel
+fig = plt.figure(figsize=(16, 22))
+gs  = gridspec.GridSpec(3, 2, figure=fig, hspace=0.65, wspace=0.38,
+                        top=0.96, bottom=0.04)
+
+fig.suptitle(
+    "Dinámica de Cagan (1956) — Respuesta de Precios a Distintos Tipos de Shocks Monetarios\n"
+    r"Modelo: $m_t - p_t = -\alpha\,\mathbb{E}_t[p_{t+1} - p_t]$   $\Rightarrow$   "
+    r"$p_t = (1-\beta)\sum_{j=0}^{\infty} \beta^j\,\mathbb{E}_t[m_{t+j}]$,   "
+    r"$\beta = \alpha/(1+\alpha) = $" + f"{beta:.3f}",
+    fontsize=12, fontweight="bold", y=0.99
+)
+
+BOX = dict(boxstyle="round,pad=0.5", alpha=0.93)
+
+# Helper: pone una caja de texto FUERA del panel, justo debajo del eje x
+def nota_inferior(ax, texto, color_borde="goldenrod", color_fondo="lightyellow"):
+    ax.text(
+        0.5, -0.28,          # x=centro, y=debajo del eje (fuera del área de datos)
+        texto,
+        transform=ax.transAxes,
+        fontsize=8.2,
+        va="top", ha="center",
+        clip_on=False,
+        linespacing=1.6,
+        bbox=dict(**BOX, facecolor=color_fondo, edgecolor=color_borde)
+    )
+
+# ─── PANEL A: Nivel de precios ────────────────────────────────────────────
+ax_A = fig.add_subplot(gs[0, :])
+
+ax_A.axhline(m_base, color=COLOR_GRIS, lw=0.8, ls=":",
+             label="Baseline $p = m_0 = 100$")
+ax_A.axvline(T_ann, color="darkorange", lw=1.4, ls="--", alpha=0.7,
+             label=f"Implementación $t = T = {T_ann}$")
+
+ax_A.plot(tiempo, p_perm_noant,  color=COLOR_AZUL,  lw=2.4,
+          label=f"Caso 1: Permanente No Anticipado  "
+                f"[$\\Delta p_0 = {p_perm_noant[0]-m_base:.2f}$ pp]")
+ax_A.plot(tiempo, p_trans_noant, color=COLOR_ROJO,  lw=2.4,
+          label=f"Caso 2: Transitorio No Anticipado  "
+                f"[$\\Delta p_0 = {p_trans_noant[0]-m_base:.2f}$ pp]")
+ax_A.plot(tiempo, p_perm_ant,    color=COLOR_VERDE, lw=2.4, ls="--",
+          label=f"Caso 3: Permanente Anticipado  "
+                f"[$\\Delta p_0 = {p_perm_ant[0]-m_base:.2f}$ pp]")
+ax_A.plot(tiempo, p_trans_ant,   color=COLOR_LILA,  lw=2.4, ls=":",
+          label=f"Caso 4: Transitorio Anticipado  "
+                f"[$\\Delta p_0 = {p_trans_ant[0]-m_base:.2f}$ pp]")
+
+ax_A.set_title("Panel A — Nivel de Precios $p_t$ bajo los 4 Tipos de Shocks",
+               fontsize=11, fontweight="bold", pad=10)
+ax_A.set_xlabel("Período $t$", fontsize=10)
+ax_A.set_ylabel("$p_t$ (escala logarítmica $\\times$ 100)", fontsize=10)
+ax_A.legend(loc="upper right", fontsize=8.5, framealpha=0.95,
+            handlelength=2.2, borderpad=0.8)
+ax_A.set_xlim(-1, T_tot)
+ax_A.grid(True, alpha=0.22)
+
+nota_inferior(ax_A,
+    f"Resumen de pass-through en $t=0$ (shock $\\Delta m = {delta_m:.0f}$ pp, "
+    f"$\\alpha={alpha}$, $\\beta={beta:.3f}$)\n"
+    f"Caso 1 (Perm, No Ant): $\\Delta p_0 = \\Delta m = {delta_m:.0f}$ pp  —  100% pass-through inmediato\n"
+    f"Caso 2 (Trans, No Ant): $\\Delta p_0 = (1-\\beta)\\Delta m = {(1-beta)*delta_m:.2f}$ pp  —  "
+    f"{(1-beta)*100:.0f}% pass-through (agentes saben que el shock es temporal)\n"
+    f"Caso 3 (Perm, Ant): $\\Delta p_0 = \\beta^T \\Delta m = {beta**T_ann*delta_m:.2f}$ pp  —  "
+    f"precios se mueven {T_ann} períodos ANTES de la implementación\n"
+    f"Caso 4 (Trans, Ant): $\\Delta p_0 = (1-\\beta)\\beta^T \\Delta m = "
+    f"{(1-beta)*beta**T_ann*delta_m:.2f}$ pp  —  efecto mínimo (lejano y transitorio)"
+)
+
+# ─── PANEL B: Inflación ───────────────────────────────────────────────────
+ax_B = fig.add_subplot(gs[1, :])
+
+ax_B.axhline(0, color="black", lw=0.9)
+ax_B.axvline(T_ann, color="darkorange", lw=1.4, ls="--", alpha=0.7,
+             label=f"Implementación $t = T = {T_ann}$")
+
+ax_B.bar(tiempo - 0.3, pi_perm_noant,  width=0.2, color=COLOR_AZUL,  alpha=0.85,
+         label="Caso 1: Permanente No Anticipado")
+ax_B.bar(tiempo - 0.1, pi_trans_noant, width=0.2, color=COLOR_ROJO,  alpha=0.85,
+         label="Caso 2: Transitorio No Anticipado")
+ax_B.bar(tiempo + 0.1, pi_perm_ant,    width=0.2, color=COLOR_VERDE, alpha=0.85,
+         label=f"Caso 3: Permanente Anticipado (impl. $t={T_ann}$)")
+ax_B.bar(tiempo + 0.3, pi_trans_ant,   width=0.2, color=COLOR_LILA,  alpha=0.85,
+         label="Caso 4: Transitorio Anticipado")
+
+# Etiquetas numéricas encima de barras verdes (Caso 3, t=1..T)
+for t in range(1, T_ann + 1):
+    val = pi_perm_ant[t]
+    if abs(val) > 0.05:
+        ax_B.text(t + 0.1, val + 0.1, f"{val:.2f}",
+                  ha="center", va="bottom",
+                  fontsize=7, color=COLOR_VERDE, fontweight="bold")
+
+ax_B.set_title("Panel B — Tasa de Inflación $\\pi_t = p_t - p_{t-1}$",
+               fontsize=11, fontweight="bold", pad=10)
+ax_B.set_xlabel("Período $t$", fontsize=10)
+ax_B.set_ylabel("$\\pi_t$ (puntos porcentuales)", fontsize=10)
+ax_B.legend(loc="upper right", fontsize=8.5, framealpha=0.95)
+ax_B.set_xlim(-1, T_tot)
+ax_B.set_ylim(-5.5, 12)
+ax_B.grid(True, alpha=0.22)
+
+deflacion_teorica = (1 - beta) * delta_m
+nota_inferior(ax_B,
+    f"Caso 1: inflación solo en $t=0$ ($\\pi_0 = {pi_perm_noant[0]:.2f}$ pp), "
+    f"luego $\\pi_t = 0$ — shock ya absorbido completamente\n"
+    f"Caso 2: $\\pi_0 = +(1-\\beta)\\Delta m = +{deflacion_teorica:.2f}$ pp en $t=0$;  "
+    f"$\\pi_1 = -(1-\\beta)\\Delta m = -{deflacion_teorica:.2f}$ pp en $t=1$ (deflación cuando desaparece el shock)\n"
+    f"Caso 3: $\\pi_t = (1-\\beta)\\,\\beta^{{T-t}}\\,\\Delta m$ para $1 \\leq t \\leq T$ — "
+    f"inflación gradual creciente (valores: "
+    + ", ".join([f"$t={t}$: {pi_perm_ant[t]:.2f}" for t in range(1, T_ann+1)])
+    + f");  suma total $= \\Delta m\\cdot(1-\\beta^T) = {delta_m*(1-beta**T_ann):.2f}$ pp\n"
+    f"Caso 4: efecto muy pequeño y focalizado en $t={T_ann}$; "
+    f"inflación máxima $= {max(pi_trans_ant):.2f}$ pp"
+)
+
+# ─── PANEL C: Sensibilidad a alpha ────────────────────────────────────────
+ax_C = fig.add_subplot(gs[2, 0])
+alphas_test = [0.5, 1.0, 2.0, 5.0, 10.0]
+colores_C   = [COLOR_ROJO, COLOR_NARANJA, COLOR_AZUL, COLOR_VERDE, COLOR_LILA]
+dp0_vals    = []
+
+for alph, col in zip(alphas_test, colores_C):
+    bet = alph / (1 + alph)
+    m_path_C = np.zeros((T_tot, J_max))
+    for t in range(T_tot):
+        for j in range(J_max):
+            m_path_C[t, j] = m_base + delta_m if (t + j) >= T_ann else m_base
+    p_C  = calcular_precios(m_path_C, bet, T_tot)
+    dp0  = p_C[0] - m_base
+    dp0_vals.append(dp0)
+    ax_C.plot(tiempo, p_C, color=col, lw=2.0,
+              label=f"$\\alpha={alph:.1f}$, $\\beta={bet:.3f}$,  $\\Delta p_0={dp0:.2f}$")
+
+ax_C.axhline(m_base, color=COLOR_GRIS, lw=0.8, ls=":")
+ax_C.axvline(T_ann, color="darkorange", lw=1.2, ls="--", alpha=0.6)
+ax_C.set_title(f"Panel C — Sensibilidad a $\\alpha$\n"
+               f"(Caso 3: Permanente Anticipado, $T={T_ann}$)",
+               fontsize=10, fontweight="bold", pad=8)
+ax_C.set_xlabel("Período $t$", fontsize=9)
+ax_C.set_ylabel("$p_t$", fontsize=9)
+ax_C.legend(loc="upper left", fontsize=7.5, framealpha=0.95,
+            title="$\\alpha$,  $\\beta$,  $\\Delta p_0$ en $t=0$",
+            title_fontsize=7)
+ax_C.grid(True, alpha=0.22)
+
+nota_inferior(ax_C,
+    f"$\\alpha \\uparrow$ $\\Rightarrow$ $\\beta = \\alpha/(1+\\alpha) \\uparrow$ $\\Rightarrow$ "
+    f"mayor efecto anticipatorio en $t=0$\n"
+    + "  |  ".join([f"$\\alpha={a}$: $\\Delta p_0={v:.2f}$"
+                    for a, v in zip(alphas_test, dp0_vals)]),
+    color_borde="steelblue", color_fondo="#EAF4FF"
+)
+
+# ─── PANEL D: Convergencia ────────────────────────────────────────────────
+ax_D = fig.add_subplot(gs[2, 1])
+
+J_plot = 30
+j_vec  = np.arange(J_plot)
+beta_c = alpha / (1 + alpha)
+m_j_esperado  = np.array([m_base + delta_m if j >= T_ann else m_base for j in j_vec])
+contribucion  = (1 - beta_c) * beta_c**j_vec * m_j_esperado
+contrib_base  = m_base * (1 - beta_c) * beta_c**j_vec
+contrib_delta = contribucion - contrib_base
+suma_acumulada = np.cumsum(contribucion)
+
+ax_D.bar(j_vec, contrib_base,  color=COLOR_GRIS, alpha=0.35, label="Baseline $m_0$")
+ax_D.bar(j_vec, contrib_delta, color=COLOR_AZUL, alpha=0.75,
+         bottom=contrib_base,  label="Incremento de $\\Delta m$")
+ax_D.axvline(T_ann - 0.5, color=COLOR_VERDE, lw=1.5, ls="--",
+             label=f"$j = T = {T_ann}$: inicio del shock")
+
+ax_D2 = ax_D.twinx()
+ax_D2.plot(j_vec, suma_acumulada, color=COLOR_ROJO, lw=2.0,
+           marker="o", ms=3, label="$p_0$ acumulado")
+ax_D2.axhline(suma_acumulada[-1], color=COLOR_ROJO, lw=0.7, ls=":", alpha=0.6)
+ax_D2.set_ylabel("$p_0$ acumulado", fontsize=8.5, color=COLOR_ROJO)
+ax_D2.tick_params(axis="y", colors=COLOR_ROJO, labelsize=8)
+
+ax_D.set_title("Panel D — Convergencia de la Suma Infinita en $t=0$\n"
+               "(Caso 3: Permanente Anticipado)",
+               fontsize=9.5, fontweight="bold", pad=8)
+ax_D.set_xlabel("Horizonte $j$ (términos en la suma)", fontsize=9)
+ax_D.set_ylabel(r"$(1-\beta)\,\beta^j\,\mathbb{E}_0[m_j]$", fontsize=8.5)
+lines1, labels1 = ax_D.get_legend_handles_labels()
+lines2, labels2 = ax_D2.get_legend_handles_labels()
+ax_D.legend(lines1 + lines2, labels1 + labels2, fontsize=7.5, loc="upper right")
+ax_D.grid(True, alpha=0.22)
+
+nota_inferior(ax_D,
+    f"$p_0 = (1-\\beta)\\sum_{{j=0}}^{{\\infty}} \\beta^j \\mathbb{{E}}_0[m_j]$   "
+    f"Converge porque $\\beta = {beta_c:.3f} < 1$\n"
+    f"El salto en $j = T = {T_ann}$ refleja que a partir de ahí $\\mathbb{{E}}_0[m_j] = m_0 + \\Delta m$\n"
+    f"Valor de convergencia: $p_0^* = {suma_acumulada[-1]:.4f}$  "
+    f"(teórico: $m_0 + \\beta^T \\Delta m = {m_base + beta_c**T_ann * delta_m:.4f}$)",
+    color_borde="steelblue", color_fondo="#EAF4FF"
+)
+
+# ── GUARDAR ──────────────────────────────────────────────────────────────
+plt.savefig("cagan_dynamics.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+print("\n" + "=" * 65)
+print("  RESUMEN DE RESULTADOS PARA LA PD")
+print("=" * 65)
+print(f"  alpha = {alpha},  beta = {beta:.4f},  Dm = {delta_m} pp,  T_anuncio = {T_ann}")
+print("-" * 65)
+print(f"  Caso 1 (Perm, No Ant):  Dp_0 = {p_perm_noant[0]-m_base:.2f} pp  (pass-through: 100%)")
+print(f"  Caso 2 (Trans, No Ant): Dp_0 = {p_trans_noant[0]-m_base:.2f} pp  (pass-through: {(1-beta)*100:.0f}%)")
+print(f"  Caso 3 (Perm, Ant):     Dp_0 = {p_perm_ant[0]-m_base:.3f} pp  (= beta^{T_ann}*Dm)")
+print(f"  Caso 4 (Trans, Ant):    Dp_0 = {p_trans_ant[0]-m_base:.4f} pp  (= (1-beta)*beta^{T_ann}*Dm)")
+print("-" * 65)
+
+# Tabla de inflacion del Caso 3 — verifica las barras verdes del Panel B
+# Formula: pi_t = (1-beta) * beta^(T-t) * Dm  para t = 1,...,T (creciente hacia T)
+print("\n  CASO 3 — Inflacion periodo a periodo (barras verdes Panel B):")
+print(f"  {'t':>4}  {'pi_t numerico':>15}  {'(1-b)*b^(T-t)*Dm teorico':>26}  {'error':>10}")
+print("  " + "-" * 60)
+for t in range(1, T_ann + 2):
+    if t < T_tot:
+        pi_num = pi_perm_ant[t]
+        pi_teo = (1 - beta) * beta**(T_ann - t) * delta_m if t <= T_ann else 0.0
+        marker = " <- implementacion" if t == T_ann else ""
+        print(f"  {t:>4}  {pi_num:>15.4f}  {pi_teo:>26.4f}  {pi_num - pi_teo:>10.2e}{marker}")
+print("  " + "-" * 60)
+print(f"  Suma inflacion t=1..T : {sum(pi_perm_ant[1:T_ann+1]):.4f} pp")
+print(f"  Teorico Dm*(1-beta^T) : {delta_m*(1 - beta**T_ann):.4f} pp  <- debe coincidir")
+print("-" * 65)
+print(f"\n  CORRECCION APLICADA — Deflacion Caso 2 en t=1:")
+print(f"  Valor anterior (erroneo):  -(1-b)*b*Dm = {-(1-beta)*beta*delta_m:.2f} pp")
+print(f"  Valor correcto:            -(1-b)*Dm   = {-(1-beta)*delta_m:.2f} pp")
+print(f"  Verificacion numerica:     pi_1(Caso2) = {pi_trans_noant[1]:.2f} pp  OK")
+print("-" * 65)
+print("  Grafico guardado como: cagan_dynamics.png")
+print("=" * 65)
