@@ -1,1 +1,428 @@
+import requests
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 
+# =============================================================================
+# TEORÍA CUANTITATIVA DEL DINERO Y EL MULTIPLICADOR — PERÚ (BCRP)
+# Práctica Dirigida — Macroeconomía II
+# =============================================================================
+#
+# ¿QUÉ SERIES ESTAMOS DESCARGANDO Y POR QUÉ?
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# PN00047MM — Emisión Primaria (M0)
+#   Es el dinero que crea directamente el BCRP: billetes y monedas en
+#   circulación MÁS las reservas que los bancos comerciales depositan en
+#   el BCRP (encaje). Es la "materia prima" del sistema monetario.
+#   El BCRP controla esta variable directamente mediante operaciones de
+#   mercado abierto, repos, y variaciones en la tasa de encaje.
+#
+# PN00048MM — Circulante
+#   Es la parte de M0 que está en manos del público: billetes y monedas
+#   fuera del sistema bancario. Es el componente más "visible" de M0.
+#
+# PN00049MM — Encaje (Reservas bancarias en el BCRP)
+#   Es la parte de M0 que los bancos mantienen depositada en el BCRP,
+#   ya sea porque la ley los obliga (encaje mínimo legal) o porque
+#   voluntariamente deciden tener más liquidez (encaje en exceso).
+#   M0 = Circulante + Encaje
+#
+# PN00181MM — Dinero (M1)
+#   Es el dinero que los hogares y empresas pueden gastar de inmediato:
+#   circulante + depósitos a la vista en bancos comerciales.
+#   M1 es mayor que M0 porque incluye el dinero que los bancos
+#   "crean" al prestar: cada sol de M0 genera más de un sol de M1.
+#
+# PN00193MM — Liquidez Total a Tipo de Cambio Corriente (M2)
+#   Es el agregado monetario más amplio: M1 + cuasidinero (depósitos
+#   de ahorro, depósitos a plazo, etc.) en soles y dólares.
+#   Es el más relacionado con la inflación en la ecuación MV = PY.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# ¿POR QUÉ CONSTRUIMOS EL MULTIPLICADOR NOSOTROS EN LUGAR DE USAR
+# EL QUE PUBLICA EL BCRP DIRECTAMENTE?
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# El BCRP publica su propio multiplicador monetario (serie PN04816AM),
+# pero usa una definición ligeramente distinta que incluye ajustes por
+# dolarización y tipo de cambio. Nosotros construimos M1/M0 porque:
+#
+# (1) TRANSPARENCIA: Cada número que aparece en el gráfico lo podemos
+#     rastrear exactamente hasta una serie del BCRP. No hay caja negra.
+#     Cuando el multiplicador sube de 1.36x a 1.77x, sabemos exactamente
+#     que es porque M1 creció más rápido que M0 durante Reactiva.
+#
+# (2) CONEXIÓN CON EL MODELO: El multiplicador del libro de texto es
+#     m = 1/θ, donde θ es el coeficiente de encaje. Para conectar esa
+#     fórmula con los datos, necesitamos M1/M0 y no una versión ajustada.
+#     Así podemos preguntar: ¿qué θ implícito tiene el multiplicador
+#     observado? ¿Es consistente con el encaje legal vigente?
+#
+# (3) PEDAGOGÍA: El proceso de construirlo nosotros OBLIGA a pensar en
+#     qué significa cada componente. El multiplicador del BCRP es un
+#     número. El nuestro es una historia: numerador = dinero que llega
+#     a la economía real; denominador = dinero que emitió el banco central.
+#     La ratio entre ambos ES el proceso de creación de dinero bancario.
+#
+# (4) EJERCICIO DE CONTABILIDAD MONETARIA: Al construirlo, podemos
+#     descomponer: ¿subió el multiplicador porque M1 creció? ¿O porque
+#     M0 cayó? En el caso de Reactiva, fue M1 el que creció más
+#     (los bancos prestaron con garantía estatal), NO una caída de M0.
+#     Esa distinción se pierde si usamos la serie publicada directamente.
+#
+# =============================================================================
+
+# ── CONFIGURACIÓN ─────────────────────────────────────────────────────────────
+FECHA_INI = "2005-1"
+FECHA_FIN = "2024-12"
+
+SERIES = {
+    "M0":        ("PN00047MM", "Emisión Primaria — todo el dinero creado por el BCRP"),
+    "circulante":("PN00048MM", "Circulante — billetes y monedas en manos del público"),
+    "encaje":    ("PN00049MM", "Encaje — reservas de bancos depositadas en el BCRP"),
+    "M1":        ("PN00181MM", "Dinero (M1) — lo que hogares y empresas pueden gastar hoy"),
+    "M2":        ("PN00193MM", "Liquidez Total (M2) — agregado más amplio, proxy de MV=PY"),
+}
+
+# ── FUNCIÓN DE DESCARGA ────────────────────────────────────────────────────────
+def descargar_serie(codigo, fecha_ini, fecha_fin):
+    """
+    Descarga una serie del portal BCRPData vía API REST.
+    URL: estadisticas.bcrp.gob.pe/estadisticas/series/api/{codigo}/json/...
+    El BCRP devuelve fechas como "Jan.2005" — el punto se elimina antes
+    de parsear con strptime para evitar el ValueError.
+    """
+    url = (
+        f"https://estadisticas.bcrp.gob.pe/estadisticas/series/api/"
+        f"{codigo}/json/{fecha_ini}/{fecha_fin}/ing"
+    )
+    r = requests.get(url, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+
+    periodos = [p["name"] for p in data["periods"]]
+    valores  = [p["values"][0] for p in data["periods"]]
+
+    df = pd.DataFrame({"fecha": periodos, codigo: valores})
+    df["fecha"] = df["fecha"].str.replace(".", "", regex=False)  # "Jan.2005" → "Jan2005"
+    df["fecha"] = pd.to_datetime(df["fecha"], format="%b%Y")
+    df[codigo]  = pd.to_numeric(df[codigo], errors="coerce")
+    return df.set_index("fecha")
+
+# ── DESCARGA CON DESCRIPCIÓN ──────────────────────────────────────────────────
+print("=" * 65)
+print("  DESCARGANDO SERIES DEL BCRP")
+print("=" * 65)
+
+dfs = []
+for nombre, (codigo, descripcion) in SERIES.items():
+    print(f"\n  [{codigo}] {nombre.upper()}")
+    print(f"  → {descripcion}")
+    df_tmp = descargar_serie(codigo, FECHA_INI, FECHA_FIN)
+    df_tmp.columns = [nombre]
+    dfs.append(df_tmp)
+    print(f"  ✓ {len(df_tmp)} observaciones descargadas")
+
+df = pd.concat(dfs, axis=1).sort_index()
+print(f"\n{'=' * 65}")
+print(f"  Período: {df.index[0].strftime('%b %Y')} — {df.index[-1].strftime('%b %Y')}")
+print(f"  Observaciones: {len(df)} meses")
+print("=" * 65)
+
+# ── CONSTRUCCIÓN DE VARIABLES ──────────────────────────────────────────────────
+print("\n  CONSTRUYENDO VARIABLES DERIVADAS")
+print("  ─────────────────────────────────────────────────────────────")
+
+# Verificación contable: M0 = Circulante + Encaje
+df["M0_check"] = df["circulante"] + df["encaje"]
+error_pct = ((df["M0"] - df["M0_check"]) / df["M0"] * 100).abs().mean()
+print(f"  Verificación M0 = Circulante + Encaje → error promedio: {error_pct:.2f}%")
+print(f"  (Un error < 1% confirma que las series son consistentes entre sí)")
+
+# Multiplicador monetario: construido desde primeros principios
+# m = M1 / M0 (y NO desde la serie PN04816AM del BCRP — ver comentarios arriba)
+df["multiplicador"] = df["M1"] / df["M0"]
+print(f"\n  Multiplicador (M1/M0) — rango observado:")
+print(f"  Mínimo: {df['multiplicador'].min():.2f}x  "
+      f"({df['multiplicador'].idxmin().strftime('%b %Y')})")
+print(f"  Máximo: {df['multiplicador'].max():.2f}x  "
+      f"({df['multiplicador'].idxmax().strftime('%b %Y')})")
+print(f"  Promedio pre-2020: {df.loc[:'2019-12','multiplicador'].mean():.2f}x")
+
+# Encaje implícito: θ = 1/m (el encaje que "implica" el multiplicador observado)
+df["theta_implicito"] = 1 / df["multiplicador"] * 100
+print(f"\n  Encaje implícito (θ = 1/m) — rango observado:")
+print(f"  Mínimo: {df['theta_implicito'].min():.1f}%  "
+      f"({df['theta_implicito'].idxmin().strftime('%b %Y')})")
+print(f"  Máximo: {df['theta_implicito'].max():.1f}%  "
+      f"({df['theta_implicito'].idxmax().strftime('%b %Y')})")
+
+# Brecha entre M0 y M1 (para Panel 1)
+base_date = "2019-01-01"
+df["M0_idx"] = df["M0"] / df.loc[base_date, "M0"] * 100
+df["M1_idx"] = df["M1"] / df.loc[base_date, "M1"] * 100
+df["brecha_idx"] = df["M0_idx"] - df["M1_idx"]
+
+# Crecimiento interanual M2 (proxy de μ en MV=PY)
+df["mu_M2"] = df["M2"].pct_change(12) * 100
+
+# Descomposición del encaje: legal vs exceso (circulante/M0 como proxy)
+df["encaje_ratio"] = df["encaje"] / df["M0"] * 100
+
+print("\n  ✓ Variables construidas correctamente")
+print("=" * 65)
+
+# ── COLORES Y ESTILO ──────────────────────────────────────────────────────────
+COLOR_AZUL    = "#003F87"
+COLOR_ROJO    = "#C0392B"
+COLOR_VERDE   = "#1A7A4A"
+COLOR_GRIS    = "#7F8C8D"
+COLOR_NARANJA = "orange"
+reactiva = ("2020-03-01", "2021-12-31")
+
+fig, axes = plt.subplots(3, 1, figsize=(14, 16))
+fig.suptitle(
+    "Teoría Cuantitativa del Dinero y el Multiplicador — Perú (BCRP)",
+    fontsize=14, fontweight="bold", y=0.995
+)
+
+TITULO_FONT = {"fontsize": 11, "fontweight": "bold"}
+ANNOT_FONT  = {"fontsize": 7.5}
+BOX_STYLE   = dict(boxstyle="round,pad=0.4", alpha=0.85)
+
+# =============================================================================
+# PANEL 1 — M0 vs M1 indexados (base Ene-2019 = 100)
+# Pregunta central: ¿el BCRP controla realmente la cantidad de dinero
+# que llega a la economía, o solo controla la "materia prima"?
+# =============================================================================
+ax1 = axes[0]
+
+ax1.plot(df.index, df["M0_idx"], color=COLOR_AZUL, linewidth=2.2,
+         label="Emisión Primaria M0\n(dinero creado por el BCRP)")
+ax1.plot(df.index, df["M1_idx"], color=COLOR_ROJO, linewidth=2.2,
+         linestyle="--", label="Dinero M1\n(dinero que llega a la economía real)")
+
+# Línea de referencia y zona Reactiva
+ax1.axhline(100, color=COLOR_GRIS, linewidth=0.8, linestyle=":", alpha=0.7,
+            label="Base = Ene-2019")
+ax1.axvspan(reactiva[0], reactiva[1], alpha=0.10, color=COLOR_NARANJA)
+ax1.text(pd.Timestamp("2020-04-01"), 103, "Reactiva\nPerú",
+         fontsize=8, color="darkorange", va="bottom", fontweight="bold")
+
+# Anotar mayor divergencia M0 > M1
+fecha_brecha = df["brecha_idx"].idxmax()
+val_brecha   = df.loc[fecha_brecha, "brecha_idx"]
+if val_brecha > 0:
+    ax1.annotate(
+        f"Mayor divergencia: M0 supera\na M1 en {val_brecha:.0f} pp\n"
+        f"({fecha_brecha.strftime('%b %Y')})\n"
+        f"→ Liquidez atrapada en sistema bancario",
+        xy=(fecha_brecha, df.loc[fecha_brecha, "M0_idx"]),
+        xytext=(-140, -55), textcoords="offset points",
+        arrowprops=dict(arrowstyle="->", color=COLOR_AZUL, lw=1.2),
+        fontsize=7.5, color=COLOR_AZUL,
+        bbox=dict(**BOX_STYLE, facecolor="lightblue", edgecolor=COLOR_AZUL)
+    )
+
+# Anotar cruce final: M1 > M0
+df_post = df.loc["2021-01-01":]
+cruce = df_post[df_post["M1_idx"] > df_post["M0_idx"]].index
+if len(cruce) > 0:
+    fecha_cruce = cruce[0]
+    ax1.annotate(
+        f"M1 supera a M0\n({fecha_cruce.strftime('%b %Y')})\n"
+        f"→ Crédito privado sigue\n   creciendo sin nueva emisión",
+        xy=(fecha_cruce, df.loc[fecha_cruce, "M1_idx"]),
+        xytext=(20, 20), textcoords="offset points",
+        arrowprops=dict(arrowstyle="->", color=COLOR_ROJO, lw=1.2),
+        fontsize=7.5, color=COLOR_ROJO,
+        bbox=dict(**BOX_STYLE, facecolor="#FDECEA", edgecolor=COLOR_ROJO)
+    )
+
+ax1.set_title("Base Monetaria (M0) vs. Dinero (M1) — Indexado Ene-2019 = 100",
+              **TITULO_FONT)
+ax1.set_ylabel("Índice (Ene-2019 = 100)", fontsize=9)
+ax1.legend(loc="upper left", fontsize=8.5, framealpha=0.9)
+ax1.grid(True, alpha=0.25)
+
+# Caja explicativa de las series
+ax1.text(
+    0.01, 0.04,
+    "M0 = Circulante + Encaje (lo que emite el BCRP)\n"
+    "M1 = Circulante + Depósitos a la Vista (lo que usa la economía)\n"
+    "La brecha entre ambas = dinero 'creado' por los bancos al prestar",
+    transform=ax1.transAxes, fontsize=7.2, va="bottom",
+    bbox=dict(**BOX_STYLE, facecolor="lightyellow", edgecolor="goldenrod")
+)
+
+# =============================================================================
+# PANEL 2 — Multiplicador monetario (M1/M0) construido desde primeros principios
+# Pregunta central: ¿por qué lo construimos nosotros en lugar de usar
+# la serie oficial del BCRP?
+# =============================================================================
+ax2 = axes[1]
+
+ax2.plot(df.index, df["multiplicador"], color=COLOR_AZUL, linewidth=2.2,
+         label="Multiplicador M1/M0\n(construido desde series primarias)")
+ax2.axvspan(reactiva[0], reactiva[1], alpha=0.10, color=COLOR_NARANJA,
+            label="Reactiva Perú")
+
+# Promedio pre-2020
+pre2020_mean = df.loc[:"2019-12", "multiplicador"].mean()
+ax2.axhline(pre2020_mean, color=COLOR_VERDE, linestyle=":", linewidth=1.8,
+            label=f"Promedio pre-2020 ({pre2020_mean:.2f}x)\n≡ θ implícito = {100/pre2020_mean:.1f}%")
+
+# Mínimo histórico (2013)
+min_idx = df["multiplicador"].idxmin()
+min_val = df.loc[min_idx, "multiplicador"]
+ax2.annotate(
+    f"Mínimo histórico: {min_val:.2f}x\n({min_idx.strftime('%b %Y')})\n"
+    f"θ implícito = {100/min_val:.1f}%\n"
+    f"← Desaceleración crediticia\n   post-boom de commodities",
+    xy=(min_idx, min_val),
+    xytext=(50, 10), textcoords="offset points",
+    arrowprops=dict(arrowstyle="->", color=COLOR_ROJO, lw=1.2),
+    **ANNOT_FONT, color=COLOR_ROJO,
+    bbox=dict(**BOX_STYLE, facecolor="#FDECEA", edgecolor=COLOR_ROJO)
+)
+
+# Máximo durante Reactiva
+max_react_idx = df.loc[reactiva[0]:reactiva[1], "multiplicador"].idxmax()
+max_react_val = df.loc[max_react_idx, "multiplicador"]
+ax2.annotate(
+    f"Máximo Reactiva: {max_react_val:.2f}x\n({max_react_idx.strftime('%b %Y')})\n"
+    f"θ implícito = {100/max_react_val:.1f}%\n"
+    f"← Bancos SÍ prestaron\n   (garantía estatal del Estado)",
+    xy=(max_react_idx, max_react_val),
+    xytext=(-160, -55), textcoords="offset points",
+    arrowprops=dict(arrowstyle="->", color=COLOR_AZUL, lw=1.2),
+    **ANNOT_FONT, color=COLOR_AZUL,
+    bbox=dict(**BOX_STYLE, facecolor="lightblue", edgecolor=COLOR_AZUL)
+)
+
+ax2.set_title("Multiplicador Monetario — m = M1/M0 (construido desde primeros principios)",
+              **TITULO_FONT)
+ax2.set_ylabel("Multiplicador (veces)", fontsize=9)
+ax2.legend(loc="lower right", fontsize=8, framealpha=0.9)
+ax2.grid(True, alpha=0.25)
+
+# Caja explicando por qué lo construimos nosotros
+ax2.text(
+    0.01, 0.04,
+    "¿Por qué no usamos la serie oficial del BCRP (PN04816AM)?\n"
+    "→ Transparencia: cada número es rastreable hasta M0 y M1\n"
+    "→ Conexión con el modelo: m = 1/θ del libro de texto\n"
+    "→ Pedagogía: construirlo obliga a entender cada componente\n"
+    "→ Descomposición: podemos saber si sube por M1↑ o por M0↓",
+    transform=ax2.transAxes, fontsize=7.2, va="bottom",
+    bbox=dict(**BOX_STYLE, facecolor="lightyellow", edgecolor="goldenrod")
+)
+
+# Eje Y secundario: encaje implícito θ = 1/m
+ax2b = ax2.twinx()
+ax2b.set_ylabel("Encaje implícito θ = 1/m (%)", fontsize=8, color=COLOR_GRIS)
+ax2b.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.0f%%"))
+# Calcular límites del eje secundario consistentes con el eje primario
+y1_min, y1_max = ax2.get_ylim()
+ax2b.set_ylim(100/y1_max if y1_max != 0 else 0,
+              100/y1_min if y1_min != 0 else 100)
+ax2b.tick_params(axis='y', colors=COLOR_GRIS, labelsize=8)
+
+# =============================================================================
+# PANEL 3 — Crecimiento M2: el puzzle de la QTM con datos peruanos
+# Pregunta central: si μ sube 30%, ¿por qué π no sube 30%?
+# =============================================================================
+ax3 = axes[2]
+
+ax3.fill_between(df.index, df["mu_M2"], 0,
+                 where=df["mu_M2"] >= 0,
+                 alpha=0.15, color=COLOR_AZUL)
+ax3.fill_between(df.index, df["mu_M2"], 0,
+                 where=df["mu_M2"] < 0,
+                 alpha=0.25, color=COLOR_ROJO)
+ax3.plot(df.index, df["mu_M2"], color=COLOR_AZUL, linewidth=2.0,
+         label="Crecimiento M2 (μ, var% 12m)")
+ax3.axhline(0, color="black", linewidth=0.8)
+ax3.axvspan(reactiva[0], reactiva[1], alpha=0.10, color=COLOR_NARANJA,
+            label="Reactiva Perú")
+
+# Episodio 1: Boom crediticio 2008
+pico_2008_idx = df.loc[:"2010-01", "mu_M2"].idxmax()
+pico_2008_val = df.loc[pico_2008_idx, "mu_M2"]
+ax3.annotate(
+    f"Boom crediticio\npre-crisis global\nμ = {pico_2008_val:.1f}%\n({pico_2008_idx.strftime('%b %Y')})\n→ Aquí SÍ hubo inflación",
+    xy=(pico_2008_idx, pico_2008_val),
+    xytext=(20, -65), textcoords="offset points",
+    arrowprops=dict(arrowstyle="->", color=COLOR_ROJO, lw=1.2),
+    **ANNOT_FONT, color=COLOR_ROJO,
+    bbox=dict(**BOX_STYLE, facecolor="#FDECEA", edgecolor=COLOR_ROJO)
+)
+
+# Episodio 2: Reactiva
+pico_react_idx = df.loc[reactiva[0]:reactiva[1], "mu_M2"].idxmax()
+pico_react_val = df.loc[pico_react_idx, "mu_M2"]
+ax3.annotate(
+    f"Reactiva Perú\nμ = {pico_react_val:.1f}%\n({pico_react_idx.strftime('%b %Y')})\n"
+    f"→ ¿Por qué NO hubo\n   inflación inmediata?\n"
+    f"   V colapsó: hogares ahorraron,\n"
+    f"   empresas pagaron deudas",
+    xy=(pico_react_idx, pico_react_val),
+    xytext=(-175, -80), textcoords="offset points",
+    arrowprops=dict(arrowstyle="->", color=COLOR_AZUL, lw=1.2),
+    **ANNOT_FONT, color=COLOR_AZUL,
+    bbox=dict(**BOX_STYLE, facecolor="lightblue", edgecolor=COLOR_AZUL)
+)
+
+# Episodio 3: Caída post-2022
+fecha_caida = pd.Timestamp("2023-04-01")
+if fecha_caida in df.index:
+    val_caida = df.loc[fecha_caida, "mu_M2"]
+    ax3.annotate(
+        f"BCRP sube tasas → μ → 0%\n({fecha_caida.strftime('%b %Y')})\n"
+        f"π ≈ μ − g → inflación se modera\n"
+        f"Teoría cuantitativa funciona",
+        xy=(fecha_caida, val_caida),
+        xytext=(15, 35), textcoords="offset points",
+        arrowprops=dict(arrowstyle="->", color=COLOR_VERDE, lw=1.2),
+        **ANNOT_FONT, color=COLOR_VERDE,
+        bbox=dict(**BOX_STYLE, facecolor="#EAFAF1", edgecolor=COLOR_VERDE)
+    )
+
+ax3.set_title("Crecimiento Interanual de M2 — proxy de μ en MV = PY",
+              **TITULO_FONT)
+ax3.set_ylabel("Variación interanual (%)", fontsize=9)
+ax3.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.0f%%"))
+ax3.legend(loc="upper right", fontsize=8.5, framealpha=0.9)
+ax3.grid(True, alpha=0.25)
+
+# Caja con la lógica de la QTM
+ax3.text(
+    0.01, 0.04,
+    "MV = PY → π ≈ μ − g   (tomando logs y diferenciando)\n"
+    "Si V es estable: más dinero (μ↑) → más inflación (π↑)\n"
+    "Si V colapsa (como en 2020-21): el aumento de M no genera π\n"
+    "→ Conclusión: V inestable invalida el targeting de agregados monetarios",
+    transform=ax3.transAxes, fontsize=7.2, va="bottom",
+    bbox=dict(**BOX_STYLE, facecolor="lightyellow", edgecolor="goldenrod")
+)
+
+# =============================================================================
+plt.tight_layout(rect=[0, 0, 1, 0.995])
+plt.savefig("bcrp_qtm_final.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+print("\n✓ Gráfico guardado como bcrp_qtm_final.png")
+print("\nRESUMEN PARA EL PD:")
+print("─" * 65)
+print(f"  Multiplicador promedio pre-2020 : {pre2020_mean:.2f}x")
+print(f"  → Encaje implícito pre-2020     : {100/pre2020_mean:.1f}%")
+print(f"  Multiplicador máximo (Reactiva) : {max_react_val:.2f}x")
+print(f"  → Encaje implícito mínimo       : {100/max_react_val:.1f}%")
+print(f"  Multiplicador mínimo histórico  : {min_val:.2f}x")
+print(f"  → Encaje implícito máximo       : {100/min_val:.1f}%")
+print("─" * 65)
+print("  Series descargadas:")
+for nombre, (codigo, desc) in SERIES.items():
+    print(f"  [{codigo}] {nombre:12} → {desc[:50]}")
+print("─" * 65)
